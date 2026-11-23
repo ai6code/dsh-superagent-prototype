@@ -63,14 +63,19 @@ def ps(*options, check=False):
             yield int(parts[0]), parts[1], parts[2].split()
 
 
+def service_name(name):
+    """Return whether a process name is a DSH service interpreter; Node 26 names the main thread `node-MainThread`."""
+    return name == 'dsh' or name == 'node' or name.startswith('node-') or name.startswith('dsh-')
+
+
 def running(pid, profile):
     """Return whether `pid` is currently running the DSH service for `profile` (`ps -p` returns nothing once exited)."""
-    return any(found == pid and name in ('node', 'dsh') and serves(args, profile) for found, name, args in ps('-p', str(pid)))
+    return any(found == pid and service_name(name) and serves(args, profile) for found, name, args in ps('-p', str(pid)))
 
 
 def processes(profile):
     """Return PIDs of all running DSH service processes for `profile`, including instances started outside this script and the recorded `service.pid` while still running."""
-    found = [pid for pid, name, args in ps('-ax', check=True) if name in ('node', 'dsh') and serves(args, profile)]
+    found = [pid for pid, name, args in ps('-ax', check=True) if service_name(name) and serves(args, profile)]
     try:
         pid = int((control(profile) / 'service.pid').read_text())
     except (OSError, ValueError):
@@ -78,12 +83,39 @@ def processes(profile):
     return found + [pid] if pid not in found and running(pid, profile) else found
 
 
-def state(url):
-    """Fetch health and setup status from the management API, or return None if unreachable."""
+def newest_log(profile):
+    """Return the newest log file for `profile`, or None before its first start."""
+    name = re.compile(re.escape(f'dsh-superagent-{profile}-') + r'\d{8}-\d{6}-\d+\.log')
+    logs = [path for path in ARTIFACTS.iterdir() if name.fullmatch(path.name)] if ARTIFACTS.is_dir() else []
+    return max(logs, key=lambda path: path.stat().st_mtime, default=None)
+
+
+def log_token(profile):
+    """Return the entry token DSH printed to the newest log; the browser exchanges it for a session cookie."""
+    log = newest_log(profile)
+    if log is None:
+        return None
+    match = re.search(r'\?token=([A-Za-z0-9_-]+)', log.read_text(errors='replace'))
+    return match.group(1) if match else None
+
+
+def state(url, profile):
+    """Fetch health and setup status from the management API, or return None if unreachable.
+
+    DSH requires an authenticated peer on its own routes; the loopback entry token in the newest log stands in for a
+    browser that has opened the printed URL, so the control script reads the same state the panel shows.
+    """
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
+    token = log_token(profile)
+    if token is not None:
+        try:
+            opener.open(url.rstrip('/') + '/?token=' + token, timeout=2)
+        except (OSError, ValueError):
+            pass
     request = urllib.request.Request(url.rstrip('/') + '/orchestrator/api/state',
                                      headers={'x-orchestrator-request': '1'})
     try:
-        with urllib.request.urlopen(request, timeout=2) as response:
+        with opener.open(request, timeout=2) as response:
             value = json.load(response)
         # Keys omitted by another version read as empty so the service is not mistaken for unreachable.
         health, setup = value.get('health') or {}, value.get('setup') or {}
@@ -121,7 +153,7 @@ def outcome(pids, current):
 
 def status(args):
     pids = processes(args.profile)
-    current = state(args.url) if pids else None
+    current = state(args.url, args.profile) if pids else None
     print(json.dumps({'pids': pids, 'cwd': str(ROOT), 'url': args.url,
                       'manually_stopped': stopped(args.profile), 'health': current and current['health'],
                       'errors': current and current['errors'], 'setup': current and current['setup'],
@@ -167,7 +199,7 @@ def start(args):
             raise RuntimeError('Both dsh and tmux must be on PATH.')
         exists = subprocess.run(['tmux', 'has-session', '-t', '=' + session],
                                 capture_output=True).returncode == 0
-        if state(args.url) is not None:
+        if state(args.url, args.profile) is not None:
             raise RuntimeError('An existing orchestrator answers at this URL; refusing duplicate startup.')
         stamp = time.strftime('%Y%m%d-%H%M%S')
         log = ARTIFACTS / f'dsh-superagent-{args.profile}-{stamp}-{os.getpid()}.log'
@@ -189,7 +221,7 @@ def start(args):
     (control(args.profile) / 'manually-stopped').unlink(missing_ok=True)
     deadline = time.monotonic() + args.timeout
     while time.monotonic() < deadline:
-        current = state(args.url)
+        current = state(args.url, args.profile)
         if processes(args.profile) and runtime_up(current):
             code = status(args)
             if current['setup']:
