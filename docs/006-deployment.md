@@ -140,6 +140,14 @@ Check dsh-superagent: run `scripts/dsh-superagent --profile superagent status` i
 
 `--respect-stop` preserves an intentional stop. Only `stop` writes the marker; `start` clears it. `restart` writes no marker, so the check can recover a restart whose shutdown timed out.
 
+On this machine, the installation uses profile `superagent` and serves the panel on port `3082`, the defaults of `start` and `status`. The panel listens on `127.0.0.1` only, so from another machine, forward the port over SSH instead of exposing it:
+
+```sh
+ssh -N -L 3082:127.0.0.1:3082 <user>@<host>
+```
+
+Then open `http://127.0.0.1:3082` from the machine that runs the tunnel.
+
 ## Settings
 
 Setup must succeed before polling or work starts. Overview lists missing requirements and links to their settings. A settings change runs setup again. If you fix something outside the application, such as CLI authentication, choose **Check again**.
