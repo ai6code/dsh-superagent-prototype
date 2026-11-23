@@ -29,7 +29,7 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [006 Deployment](docs/006-deployment.md): manual setup, configuration, upgrades and troubleshooting
 - [007 Architecture](docs/007-architecture.md)
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
-- [009 Multi-project](docs/009-multi-project.md): proposal for several repositories, not implemented
+- [009 多项目方案](docs/009-multi-project.md): 多仓库方案（中文），尚未实现
 
 ## Development
 
